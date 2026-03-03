@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-load_test.py  –  Continuous load generator for the monitoring demo API.
+load_test.py  -  Continuous load generator for the monitoring demo API.
 
 What it does
 ------------
