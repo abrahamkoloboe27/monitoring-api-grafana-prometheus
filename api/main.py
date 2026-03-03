@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
@@ -104,6 +105,25 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 
 Instrumentator().instrument(app).expose(app)
+
+# ---------------------------------------------------------------------------
+# CORS – allow the React and Vue frontends (and local dev servers)
+# ---------------------------------------------------------------------------
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3001",  # React dev / prod
+        "http://localhost:3002",  # Vue dev / prod
+        "http://localhost:5173",  # Vite default dev port
+        "http://localhost:5174",  # Vite second dev port
+        "http://frontend-react:3001",
+        "http://frontend-vue:3002",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ---------------------------------------------------------------------------
 # Request / response logging middleware

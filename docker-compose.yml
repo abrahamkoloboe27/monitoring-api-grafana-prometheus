@@ -13,6 +13,34 @@ services:
       timeout: 5s
       retries: 3
 
+  frontend-react:
+    build:
+      context: ./frontend-react
+      dockerfile: Dockerfile
+    container_name: frontend_react
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - API_URL=http://api:8123
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  frontend-vue:
+    build:
+      context: ./frontend-vue
+      dockerfile: Dockerfile
+    container_name: frontend_vue
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+      - API_URL=http://api:8123
+    depends_on:
+      - api
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:v2.51.2
     container_name: prometheus
@@ -29,6 +57,8 @@ services:
     restart: unless-stopped
     depends_on:
       - api
+      - frontend-react
+      - frontend-vue
 
   grafana:
     image: grafana/grafana:10.4.2

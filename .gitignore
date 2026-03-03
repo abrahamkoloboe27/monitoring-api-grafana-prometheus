@@ -16,6 +16,11 @@ env/
 prometheus_data/
 grafana_data/
 
+# Node.js
+node_modules/
+frontend-react/dist/
+frontend-vue/dist/
+
 # IDE
 .idea/
 .vscode/
