@@ -140,6 +140,141 @@
         }
       ],
       "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Request Origins – qui appelle l'API ?",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 20 },
+      "collapsed": false
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Request Rate by Source",
+      "description": "Shows which client or frontend is calling the API, identified from the Referer / Origin header. 'direct' means no Referer header was sent (curl, Postman, server-to-server, etc.).",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+      "targets": [
+        {
+          "expr": "sum by (source) (rate(api_requests_by_source_total[1m]))",
+          "legendFormat": "{{source}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Request Rate by Client Type",
+      "description": "Broad category of the caller derived from the User-Agent header: browser, node (server-side proxy), python (scripts / load tests), curl, other, unknown.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
+      "targets": [
+        {
+          "expr": "sum by (client_type) (rate(api_requests_by_source_total[1m]))",
+          "legendFormat": "{{client_type}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Response Status by Source",
+      "description": "HTTP status codes grouped by caller origin. Helps detect which client is generating errors.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 29 },
+      "targets": [
+        {
+          "expr": "sum by (source, status_code) (rate(api_requests_by_source_total[1m]))",
+          "legendFormat": "{{source}} – {{status_code}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 13,
+      "type": "table",
+      "title": "Request Summary by Source × Route (last 5 min)",
+      "description": "Tabular breakdown: which source called which endpoint, how many times, and what response codes it received.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 29 },
+      "targets": [
+        {
+          "expr": "sort_desc(sum by (source, client_type, handler, status_code) (increase(api_requests_by_source_total[5m])))",
+          "legendFormat": "",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "options": {
+        "sortBy": [{ "displayName": "Value", "desc": true }]
+      },
+      "fieldConfig": {
+        "defaults": { "custom": { "displayMode": "auto" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Value" },
+            "properties": [
+              { "id": "displayName", "value": "Requests" },
+              { "id": "custom.width", "value": 80 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "status_code" },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "green",  "value": null },
+                    { "color": "yellow", "value": 400  },
+                    { "color": "red",    "value": 500  }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        { "id": "labelsToFields",  "options": { "mode": "columns" } },
+        { "id": "sortBy", "options": { "fields": [{ "displayName": "Value", "desc": true }] } }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "piechart",
+      "title": "Source Distribution (last 5 min)",
+      "description": "Proportion of requests per source over the last 5 minutes.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
+      "targets": [
+        {
+          "expr": "sum by (source) (increase(api_requests_by_source_total[5m]))",
+          "legendFormat": "{{source}}",
+          "instant": true
+        }
+      ],
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 15,
+      "type": "piechart",
+      "title": "Client Type Distribution (last 5 min)",
+      "description": "Proportion of requests per client type over the last 5 minutes.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
+      "targets": [
+        {
+          "expr": "sum by (client_type) (increase(api_requests_by_source_total[5m]))",
+          "legendFormat": "{{client_type}}",
+          "instant": true
+        }
+      ],
+      "options": { "legend": { "displayMode": "table", "placement": "right" } },
+      "fieldConfig": { "defaults": { "unit": "short" } }
     }
   ]
 }

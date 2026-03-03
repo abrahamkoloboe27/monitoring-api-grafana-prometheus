@@ -1,0 +1,346 @@
+# Grafana Unified Alerting – Alert Rules
+# Docs: https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/file-provisioning/
+#
+# Datasource UID must match grafana/provisioning/datasources/prometheus.yml
+# All rules are evaluated by Grafana directly against the Prometheus datasource.
+
+apiVersion: 1
+
+groups:
+  # ── Availability ────────────────────────────────────────────────────────────
+  - orgId: 1
+    name: availability
+    folder: Monitoring Alerts
+    interval: 1m
+    rules:
+
+      # Frontend service unreachable (Prometheus scrape target is down)
+      - uid: alert-frontend-down
+        title: "Frontend Down"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus-datasource
+            model:
+              datasource: { type: prometheus, uid: prometheus-datasource }
+              expr: "up{job=~\"frontend.*\"}"
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+                  operator:  { type: and }
+                  query:     { params: [A] }
+                  reducer:   { type: last, params: [] }
+                  type: query
+        noDataState: Alerting
+        execErrState: Error
+        for: 1m
+        labels:
+          severity: critical
+          type: availability
+        annotations:
+          summary: "Frontend service {{ $labels.job }} is DOWN"
+          description: "Prometheus cannot reach the metrics endpoint of {{ $labels.job }}. The service may be crashed or unreachable."
+
+      # FastAPI service unreachable
+      - uid: alert-api-down
+        title: "API Down"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus-datasource
+            model:
+              datasource: { type: prometheus, uid: prometheus-datasource }
+              expr: "up{job=\"fastapi\"}"
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+                  operator:  { type: and }
+                  query:     { params: [A] }
+                  reducer:   { type: last, params: [] }
+                  type: query
+        noDataState: Alerting
+        execErrState: Error
+        for: 1m
+        labels:
+          severity: critical
+          type: availability
+        annotations:
+          summary: "FastAPI backend is DOWN"
+          description: "Prometheus cannot scrape the FastAPI /metrics endpoint. The API may be crashed or unreachable."
+
+      # /health endpoint not returning 2xx (no successful health-check in last 5 min)
+      - uid: alert-api-health-fail
+        title: "API /health Not Healthy"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus-datasource
+            model:
+              datasource: { type: prometheus, uid: prometheus-datasource }
+              # Returns 0 when /health has returned only non-2xx codes in the window,
+              # or no data at all (health endpoint never called → noDataState: Alerting).
+              expr: "sum(increase(http_requests_total{handler=\"/health\", status=~\"2..\"}[5m]))"
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+                  operator:  { type: and }
+                  query:     { params: [A] }
+                  reducer:   { type: last, params: [] }
+                  type: query
+        noDataState: Alerting
+        execErrState: Error
+        for: 2m
+        labels:
+          severity: critical
+          type: availability
+        annotations:
+          summary: "API /health endpoint is not returning success"
+          description: "The FastAPI /health endpoint has not returned a 2xx response in the last 5 minutes."
+
+  # ── Error Rates ─────────────────────────────────────────────────────────────
+  - orgId: 1
+    name: error-rates
+    folder: Monitoring Alerts
+    interval: 1m
+    rules:
+
+      # API returning too many 4xx responses
+      - uid: alert-api-high-4xx
+        title: "API High 4xx Rate"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus-datasource
+            model:
+              datasource: { type: prometheus, uid: prometheus-datasource }
+              expr: "sum(rate(http_requests_total{status=~\"4..\"}[5m]))"
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.5] }   # > 0.5 req/s with 4xx = ~30 errors/min
+                  operator:  { type: and }
+                  query:     { params: [A] }
+                  reducer:   { type: last, params: [] }
+                  type: query
+        noDataState: NoData
+        execErrState: Error
+        for: 2m
+        labels:
+          severity: warning
+          type: error-rate
+        annotations:
+          summary: "High 4xx error rate on the API"
+          description: "The API is returning more than 0.5 req/s with 4xx status codes over the last 5 minutes."
+
+      # API returning too many 5xx responses
+      - uid: alert-api-high-5xx
+        title: "API High 5xx Rate"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus-datasource
+            model:
+              datasource: { type: prometheus, uid: prometheus-datasource }
+              expr: "sum(rate(http_requests_total{status=~\"5..\"}[5m]))"
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.05] }  # > 0.05 req/s ≈ 3 errors/min
+                  operator:  { type: and }
+                  query:     { params: [A] }
+                  reducer:   { type: last, params: [] }
+                  type: query
+        noDataState: NoData
+        execErrState: Error
+        for: 1m
+        labels:
+          severity: critical
+          type: error-rate
+        annotations:
+          summary: "High 5xx error rate on the API"
+          description: "The API is returning more than 0.05 req/s with 5xx status codes over the last 5 minutes."
+
+      # Frontend returning too many 4xx responses
+      - uid: alert-frontend-high-4xx
+        title: "Frontend High 4xx Rate"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus-datasource
+            model:
+              datasource: { type: prometheus, uid: prometheus-datasource }
+              expr: "sum by (app) (rate(frontend_http_requests_total{status_code=~\"4..\"}[5m]))"
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.5] }
+                  operator:  { type: and }
+                  query:     { params: [A] }
+                  reducer:   { type: last, params: [] }
+                  type: query
+        noDataState: NoData
+        execErrState: Error
+        for: 2m
+        labels:
+          severity: warning
+          type: error-rate
+        annotations:
+          summary: "High 4xx error rate on frontend {{ $labels.app }}"
+          description: "The {{ $labels.app }} frontend is returning more than 0.5 req/s with 4xx status codes."
+
+      # Frontend returning too many 5xx responses
+      - uid: alert-frontend-high-5xx
+        title: "Frontend High 5xx Rate"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus-datasource
+            model:
+              datasource: { type: prometheus, uid: prometheus-datasource }
+              expr: "sum by (app) (rate(frontend_http_requests_total{status_code=~\"5..\"}[5m]))"
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0.05] }
+                  operator:  { type: and }
+                  query:     { params: [A] }
+                  reducer:   { type: last, params: [] }
+                  type: query
+        noDataState: NoData
+        execErrState: Error
+        for: 1m
+        labels:
+          severity: critical
+          type: error-rate
+        annotations:
+          summary: "High 5xx error rate on frontend {{ $labels.app }}"
+          description: "The {{ $labels.app }} frontend is returning more than 0.05 req/s with 5xx status codes."
+
+  # ── Performance ──────────────────────────────────────────────────────────────
+  - orgId: 1
+    name: performance
+    folder: Monitoring Alerts
+    interval: 1m
+    rules:
+
+      # API p99 latency above threshold
+      - uid: alert-api-high-latency
+        title: "API High Latency (p99 > 1s)"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus-datasource
+            model:
+              datasource: { type: prometheus, uid: prometheus-datasource }
+              expr: "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))"
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [1] }
+                  operator:  { type: and }
+                  query:     { params: [A] }
+                  reducer:   { type: last, params: [] }
+                  type: query
+        noDataState: NoData
+        execErrState: Error
+        for: 2m
+        labels:
+          severity: warning
+          type: performance
+        annotations:
+          summary: "API p99 latency exceeds 1 second"
+          description: "The 99th percentile response time of the FastAPI backend has been above 1s for 2 minutes."
+
+      # Frontend p99 latency above threshold
+      - uid: alert-frontend-high-latency
+        title: "Frontend High Latency (p99 > 1s)"
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus-datasource
+            model:
+              datasource: { type: prometheus, uid: prometheus-datasource }
+              expr: "histogram_quantile(0.99, sum by (app, le) (rate(frontend_http_request_duration_seconds_bucket{app=~\".+\"}[5m])))"
+              instant: true
+              refId: A
+          - refId: B
+            datasourceUid: "__expr__"
+            model:
+              type: threshold
+              refId: B
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [1] }
+                  operator:  { type: and }
+                  query:     { params: [A] }
+                  reducer:   { type: last, params: [] }
+                  type: query
+        noDataState: NoData
+        execErrState: Error
+        for: 2m
+        labels:
+          severity: warning
+          type: performance
+        annotations:
+          summary: "Frontend p99 latency exceeds 1 second"
+          description: "The 99th percentile response time of a frontend server has been above 1s for 2 minutes."

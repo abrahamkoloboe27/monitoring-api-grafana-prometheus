@@ -1,0 +1,41 @@
+# Grafana Unified Alerting – Contact Points
+# Docs: https://grafana.com/docs/grafana/latest/alerting/set-up/provision-alerting-resources/file-provisioning/
+#
+# Credentials are injected via environment variables defined in docker-compose.yml or a .env file.
+# Required env vars:
+#   ALERT_EMAIL_TO          – recipient address (e.g. team@example.com)
+#   GOOGLECHAT_WEBHOOK_URL  – Google Chat incoming webhook URL
+
+apiVersion: 1
+
+contactPoints:
+  # ── Email via SMTP ──────────────────────────────────────────────────────────
+  - orgId: 1
+    name: email-alerts
+    receivers:
+      - uid: email-receiver
+        type: email
+        settings:
+          # Semicolon-separated list of recipient addresses.
+          addresses: "${ALERT_EMAIL_TO}"
+          singleEmail: false
+          message: |
+            {{ template "default.message" . }}
+        disableResolveMessage: false
+
+  # ── Google Chat (incoming webhook) ─────────────────────────────────────────
+  - orgId: 1
+    name: googlechat-alerts
+    receivers:
+      - uid: googlechat-receiver
+        type: googlechat
+        settings:
+          url: "${GOOGLECHAT_WEBHOOK_URL}"
+          message: |
+            *[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}*
+            {{ range .Alerts -}}
+            *Summary:* {{ .Annotations.summary }}
+            *Description:* {{ .Annotations.description }}
+            *Severity:* {{ .Labels.severity }}
+            {{ end }}
+        disableResolveMessage: false
