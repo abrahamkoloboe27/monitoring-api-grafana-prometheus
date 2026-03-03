@@ -16,6 +16,7 @@ contactPoints:
       - uid: email-receiver
         type: email
         settings:
+          # Semicolon-separated list of recipient addresses.
           addresses: "${ALERT_EMAIL_TO}"
           singleEmail: false
           message: |

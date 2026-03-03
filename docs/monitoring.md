@@ -288,6 +288,38 @@ Le label `app` vaut `"react"` ou `"vue"` pour distinguer les deux frontends.
 | `http_request_duration_seconds` | Histogram | Durées de réponse |
 | `http_requests_in_progress` | Gauge | Requêtes en cours |
 
+### Métriques FastAPI – origine des requêtes (custom)
+
+| Métrique | Type | Labels | Description |
+|----------|------|--------|-------------|
+| `api_requests_by_source_total` | Counter | `method`, `handler`, `status_code`, `source`, `client_type` | Requêtes API étiquetées par origine |
+
+**Valeurs du label `source`** (normalisées depuis l'en-tête `Referer` ou `Origin`) :
+
+| Valeur | Signification |
+|--------|---------------|
+| `http://localhost:3001` | Frontend React (navigateur ou proxy Node) |
+| `http://localhost:3002` | Frontend Vue (navigateur ou proxy Node) |
+| `http://frontend-react:3001` | React en réseau interne Docker |
+| `direct` | Aucun Referer/Origin (curl, Postman, appels serveur-à-serveur) |
+| `unknown` | En-tête présent mais non parsable |
+
+**Valeurs du label `client_type`** (normalisées depuis le `User-Agent`) :
+
+| Valeur | Signification |
+|--------|---------------|
+| `browser` | Navigateur (Mozilla, Chrome, Safari, Firefox, Edge) |
+| `node` | Client Node.js (node-fetch, axios, got, undici) |
+| `python` | Script Python (requests, httpx) |
+| `curl` | curl / wget |
+| `other` | User-Agent identifié mais non catégorisé |
+| `unknown` | Pas de User-Agent |
+
+Ces deux labels permettent de répondre aux questions :
+- *Quel frontend appelle mon API ?*
+- *S'agit-il d'un navigateur ou d'un proxy serveur Node ?*
+- *Est-ce un script de test (Python/curl) ?*
+
 ---
 
 ## Configuration Prometheus
@@ -381,6 +413,37 @@ Grafana charge automatiquement tous les fichiers `.json` dans ce répertoire.
 | `api-dashboard.json` | FastAPI Monitoring | Métriques de l'API backend |
 | `frontend-dashboard.json` | Frontend Monitoring | Métriques des serveurs React & Vue (hardcodé) |
 | `frontend-template-dashboard.json` | Frontend Template | **Template générique** – variable `$app` pour tout framework |
+
+### Panels du dashboard FastAPI (`api-dashboard.json`)
+
+#### Section 1 – Vue d'ensemble
+
+| Panel | PromQL | Description |
+|-------|--------|-------------|
+| Total Requests (5 min) | `sum(increase(http_requests_total[5m]))` | Volume de requêtes |
+| Error Rate (5 min) | `sum(increase(http_requests_total{status=~"5.."}[5m]))` | Erreurs 5xx |
+| Avg Response Time | `avg(rate(http_request_duration_seconds_sum[5m]) / rate(..._count[5m])) * 1000` | Latence moyenne (ms) |
+| Active Requests | `sum(http_requests_in_progress)` | Requêtes en cours |
+
+#### Section 2 – Débit & Latence
+
+| Panel | Description |
+|-------|-------------|
+| Request Rate by Status Code | Débit par code HTTP |
+| Request Rate by Route | Débit par handler FastAPI |
+| Response Latency p50/p90/p99 | Percentiles de latence |
+| 4xx / 5xx Error Rate | Taux d'erreurs clients et serveurs |
+
+#### Section 3 – Origines des requêtes (nouveau)
+
+| Panel | PromQL | Description |
+|-------|--------|-------------|
+| Request Rate by Source | `sum by (source) (rate(api_requests_by_source_total[1m]))` | Quel client ou frontend appelle l'API |
+| Request Rate by Client Type | `sum by (client_type) (rate(api_requests_by_source_total[1m]))` | browser / node / python / curl |
+| Response Status by Source | `sum by (source, status_code) (rate(api_requests_by_source_total[1m]))` | Codes de réponse par origine |
+| Request Summary (table) | `sum by (source, client_type, handler, status_code) (increase(...[5m]))` | Tableau source × route × status |
+| Source Distribution (pie) | `sum by (source) (increase(api_requests_by_source_total[5m]))` | Répartition des sources |
+| Client Type Distribution (pie) | `sum by (client_type) (increase(api_requests_by_source_total[5m]))` | Répartition des types clients |
 
 ### Dashboard Template Frontend (`frontend-template-dashboard.json`)
 
@@ -653,35 +716,17 @@ const itemsCreated = new client.Counter({
 
 ### Comment ajouter des alertes Prometheus ?
 
-Créer un fichier `prometheus/alerts.yml` :
+Les alertes sont déjà provisionnées dans ce projet – voir la section [Alerting Grafana](#alerting-grafana) et le fichier `prometheus/alerts.yml`.
 
-```yaml
-groups:
-  - name: frontend_alerts
-    rules:
-      - alert: FrontendHighErrorRate
-        expr: rate(frontend_http_requests_total{status_code=~"5.."}[5m]) > 0.1
-        for: 1m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High error rate on {{ $labels.app }} frontend"
+Pour ajouter de nouvelles règles Prometheus :
 
-      - alert: FrontendHighLatency
-        expr: histogram_quantile(0.99, rate(frontend_http_request_duration_seconds_bucket[5m])) > 1
-        for: 2m
-        labels:
-          severity: critical
-        annotations:
-          summary: "P99 latency > 1s on {{ $labels.app }} frontend"
-```
+1. Éditer `prometheus/alerts.yml` en ajoutant vos règles dans le groupe approprié.
+2. Redémarrer Prometheus (`docker compose restart prometheus`) ou recharger la config à chaud : `curl -X POST http://localhost:9090/-/reload`
 
-Et référencer ce fichier dans `prometheus.yml` :
+Pour ajouter de nouvelles règles dans Grafana Unified Alerting :
 
-```yaml
-rule_files:
-  - /etc/prometheus/alerts.yml
-```
+1. Éditer `grafana/provisioning/alerting/rules.yml`
+2. Redémarrer Grafana (`docker compose restart grafana`)
 
 ### Monitoring des performances côté navigateur (RUM)
 
@@ -689,3 +734,21 @@ Pour monitorer les performances côté navigateur (Web Vitals, temps de chargeme
 - [web-vitals](https://github.com/GoogleChrome/web-vitals) + envoi vers un endpoint custom
 - [OpenTelemetry Browser](https://opentelemetry.io/docs/languages/js/getting-started/browser/) pour un tracing distribué complet
 - Grafana Faro (agent RUM open-source de Grafana Labs)
+
+### Comment savoir qui appelle mon API ?
+
+Le middleware `log_requests` dans `api/main.py` incrémente le compteur `api_requests_by_source_total` à chaque requête. Ce compteur porte cinq labels :
+
+| Label | Exemple | Source |
+|-------|---------|--------|
+| `method` | `GET` | Méthode HTTP |
+| `handler` | `/items/{item_id}` | Route normalisée |
+| `status_code` | `200` | Code de réponse |
+| `source` | `http://localhost:3001` | En-tête `Referer` ou `Origin` normalisé en origine |
+| `client_type` | `browser` | En-tête `User-Agent` catégorisé |
+
+Le dashboard **FastAPI Monitoring** (section *Request Origins*) visualise ces données via des graphiques de débit, des camemberts et un tableau récapitulatif.
+
+> **Limites de cette approche** : Prometheus stocke des agrégats, pas des logs individuels. Pour voir le détail de chaque requête et réponse (corps, en-têtes complets, trace distribuée), combinez cette stack avec :
+> - **Grafana Loki** pour centraliser les logs uvicorn/loguru  
+> - **Grafana Tempo** + **OpenTelemetry** pour le tracing distribué

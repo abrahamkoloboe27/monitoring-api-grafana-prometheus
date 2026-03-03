@@ -16,14 +16,17 @@ GET  /metrics           - Prometheus metrics (auto-exposed by instrumentator)
 """
 
 import logging
+import re
 import sys
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
+from prometheus_client import Counter
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
 
@@ -107,6 +110,63 @@ app = FastAPI(
 Instrumentator().instrument(app).expose(app)
 
 # ---------------------------------------------------------------------------
+# Custom Prometheus metrics – request origin tracking
+# ---------------------------------------------------------------------------
+
+#: Tracks every request with labels that answer "who called the API and how".
+#: Labels are kept low-cardinality by normalising the raw header values.
+_api_requests_by_source = Counter(
+    "api_requests_by_source_total",
+    (
+        "Total API requests labeled by origin source, client type, "
+        "HTTP method, handler and response status code."
+    ),
+    ["method", "handler", "status_code", "source", "client_type"],
+)
+
+
+def _normalise_handler(path: str) -> str:
+    """Collapse parameterised path segments to limit label cardinality.
+
+    Add a new ``re.sub`` line here whenever a route with path parameters is
+    added to the application (e.g. ``/users/{user_id}``)."""
+    p = path.split("?")[0]
+    p = re.sub(r"/items/\d+", "/items/{item_id}", p)
+    return p or "/"
+
+
+def _normalise_source(raw: Optional[str]) -> str:
+    """Return the scheme+host origin extracted from a Referer or Origin header."""
+    if not raw:
+        return "direct"
+    try:
+        parsed = urlparse(raw)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        return origin if origin != "://" else "direct"
+    except Exception:
+        return "unknown"
+
+
+# Pre-compiled patterns for User-Agent categorisation (evaluated in order).
+_UA_PATTERNS = (
+    (re.compile(r"python(?:-httpx|-requests)?"), "python"),
+    (re.compile(r"node-fetch|axios|got/|undici"),  "node"),
+    (re.compile(r"curl"),                           "curl"),
+    (re.compile(r"mozilla|chrome|safari|firefox|edge"), "browser"),
+)
+
+
+def _normalise_client_type(user_agent: Optional[str]) -> str:
+    """Categorise a User-Agent string into a broad, readable client type."""
+    if not user_agent:
+        return "unknown"
+    ua = user_agent.lower()
+    for pattern, label in _UA_PATTERNS:
+        if pattern.search(ua):
+            return label
+    return "other"
+
+# ---------------------------------------------------------------------------
 # CORS – allow the React and Vue frontends (and local dev servers)
 # ---------------------------------------------------------------------------
 
@@ -132,13 +192,25 @@ app.add_middleware(
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log every incoming request with its response status and duration."""
+    """Log every incoming request with its response status and duration,
+    and increment the origin-tracking counter."""
     start = time.perf_counter()
     response = await call_next(request)
     duration_ms = (time.perf_counter() - start) * 1000
     status_code = response.status_code
     msg = f"{request.method} {request.url.path} -> {status_code} ({duration_ms:.1f} ms)"
     logger.log(_level_for_status(status_code), msg)
+
+    # Track origin: prefer Referer (browser navigation) then Origin (CORS / XHR)
+    raw_origin = request.headers.get("referer") or request.headers.get("origin")
+    _api_requests_by_source.labels(
+        method=request.method,
+        handler=_normalise_handler(request.url.path),
+        status_code=str(status_code),
+        source=_normalise_source(raw_origin),
+        client_type=_normalise_client_type(request.headers.get("user-agent")),
+    ).inc()
+
     return response
 
 
