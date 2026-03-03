@@ -1,0 +1,300 @@
+{
+  "id": null,
+  "uid": "frontend-template",
+  "title": "Frontend Monitoring – Template",
+  "description": "Generic template importable for any frontend app monitored via prom-client. Select the app with the $app variable.",
+  "tags": ["frontend", "nodejs", "prometheus", "template"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "label": "Datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "options": [],
+        "refresh": 1
+      },
+      {
+        "name": "app",
+        "type": "query",
+        "label": "Frontend App",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(frontend_http_requests_total, app)",
+        "current": {},
+        "hide": 0,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "options": [],
+        "refresh": 2,
+        "sort": 1
+      },
+      {
+        "name": "interval",
+        "type": "interval",
+        "label": "Interval",
+        "query": "30s,1m,5m,10m,30m",
+        "current": { "text": "1m", "value": "1m" },
+        "hide": 0,
+        "options": [
+          { "text": "30s", "value": "30s" },
+          { "text": "1m",  "value": "1m"  },
+          { "text": "5m",  "value": "5m"  },
+          { "text": "10m", "value": "10m" },
+          { "text": "30m", "value": "30m" }
+        ],
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total Requests – last 5 min",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum(increase(frontend_http_requests_total{app=~\"$app\"}[5m]))",
+          "legendFormat": "Requests"
+        }
+      ],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [{ "color": "blue", "value": null }] }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Error Rate (4xx+5xx) – last 5 min",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum(increase(frontend_http_requests_total{app=~\"$app\", status_code=~\"[45]..\"}[5m]))",
+          "legendFormat": "Errors"
+        }
+      ],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Node.js Heap Used",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum by (app) (nodejs_heap_size_used_bytes{app=~\"$app\"})",
+          "legendFormat": "{{app}}"
+        }
+      ],
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "green",  "value": null       },
+              { "color": "yellow", "value": 50000000   },
+              { "color": "red",    "value": 100000000  }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Service Status",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "up{job=~\"frontend.*\"}",
+          "legendFormat": "{{job}}"
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red"   } } },
+            { "type": "value", "options": { "1": { "text": "UP",   "color": "green" } } }
+          ],
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "red",   "value": null },
+              { "color": "green", "value": 1    }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Request Rate by App",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum by (app) (rate(frontend_http_requests_total{app=~\"$app\"}[$interval]))",
+          "legendFormat": "{{app}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Request Rate by Route",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum by (app, route) (rate(frontend_http_requests_total{app=~\"$app\"}[$interval]))",
+          "legendFormat": "{{app}} – {{route}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Response Latency – p50 / p90 / p99",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (app, le) (rate(frontend_http_request_duration_seconds_bucket{app=~\"$app\"}[$interval])))",
+          "legendFormat": "{{app}} p50"
+        },
+        {
+          "expr": "histogram_quantile(0.90, sum by (app, le) (rate(frontend_http_request_duration_seconds_bucket{app=~\"$app\"}[$interval])))",
+          "legendFormat": "{{app}} p90"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (app, le) (rate(frontend_http_request_duration_seconds_bucket{app=~\"$app\"}[$interval])))",
+          "legendFormat": "{{app}} p99"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "HTTP Error Rate – 4xx / 5xx",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum by (app) (rate(frontend_http_requests_total{app=~\"$app\", status_code=~\"4..\"}[$interval]))",
+          "legendFormat": "{{app}} 4xx"
+        },
+        {
+          "expr": "sum by (app) (rate(frontend_http_requests_total{app=~\"$app\", status_code=~\"5..\"}[$interval]))",
+          "legendFormat": "{{app}} 5xx"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Node.js Event Loop Lag",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "nodejs_eventloop_lag_seconds{app=~\"$app\"}",
+          "legendFormat": "{{app}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Node.js CPU Usage",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "rate(process_cpu_seconds_total{app=~\"$app\"}[$interval])",
+          "legendFormat": "{{app}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit" } }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Node.js Memory – Heap & RSS",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "nodejs_heap_size_used_bytes{app=~\"$app\"}",
+          "legendFormat": "{{app}} heap used"
+        },
+        {
+          "expr": "process_resident_memory_bytes{app=~\"$app\"}",
+          "legendFormat": "{{app}} RSS"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Active Handles & GC Duration",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "nodejs_active_handles_total{app=~\"$app\"}",
+          "legendFormat": "{{app}} active handles"
+        },
+        {
+          "expr": "rate(nodejs_gc_duration_seconds_sum{app=~\"$app\"}[$interval])",
+          "legendFormat": "{{app}} GC duration"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    }
+  ]
+}

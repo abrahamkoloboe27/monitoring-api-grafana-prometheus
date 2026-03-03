@@ -26,3 +26,6 @@ frontend-vue/dist/
 .vscode/
 *.swp
 .DS_Store
+
+# Environment / secrets
+.env

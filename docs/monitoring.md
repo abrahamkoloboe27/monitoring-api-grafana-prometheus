@@ -12,32 +12,69 @@ Ce document explique comment les frontends React et Vue sont configurés pour ê
 4. [Métriques exposées](#métriques-exposées)
 5. [Configuration Prometheus](#configuration-prometheus)
 6. [Configuration Grafana](#configuration-grafana)
-7. [Docker Compose – vue d'ensemble](#docker-compose--vue-densemble)
-8. [Développement local sans Docker](#développement-local-sans-docker)
-9. [Référence des ports](#référence-des-ports)
-10. [FAQ](#faq)
+7. [Alerting Grafana](#alerting-grafana)
+8. [Docker Compose – vue d'ensemble](#docker-compose--vue-densemble)
+9. [Développement local sans Docker](#développement-local-sans-docker)
+10. [Référence des ports](#référence-des-ports)
+11. [FAQ](#faq)
 
 ---
 
 ## Architecture générale
 
+Le schéma ci-dessous montre comment tous les composants interagissent, de la collecte des métriques jusqu'à l'envoi des alertes.
+
 ```
-Browser
-  │
-  ├─► http://localhost:3001  ──► Express (React frontend)  ──► /metrics  ──► Prometheus
-  │       proxy /api/*  ──────────────────────────────────────────────────► FastAPI :8123
-  │
-  ├─► http://localhost:3002  ──► Express (Vue frontend)    ──► /metrics  ──► Prometheus
-  │       proxy /api/*  ──────────────────────────────────────────────────► FastAPI :8123
-  │
-  ├─► http://localhost:8123  ──► FastAPI                   ──► /metrics  ──► Prometheus
-  │
-  ├─► http://localhost:9090  ──► Prometheus (scrape toutes les 15s)
-  │
-  └─► http://localhost:3000  ──► Grafana (dashboards provisionnés)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              Navigateur / Client                            │
+└─────────┬─────────────────────────────┬──────────────────────────────────  ┘
+          │ :3001                        │ :3002
+          ▼                              ▼
+┌─────────────────────┐      ┌─────────────────────┐      ┌──────────────────┐
+│  Express + React    │      │  Express + Vue      │      │  FastAPI :8123   │
+│  (frontend-react)   │      │  (frontend-vue)     │      │  /health         │
+│  GET /metrics ──────┼──┐   │  GET /metrics ──────┼──┐   │  GET /metrics ───┼──┐
+│  proxy /api/* ──────┼──┼───┼─────────────────────┼──┼──►│  /items          │  │
+└─────────────────────┘  │   └─────────────────────┘  │   └──────────────────┘  │
+                         │                             │                         │
+          ┌──────────────┘─────────────────────────────┘─────────────────────── ┘
+          │  scrape /metrics toutes les 15 s
+          ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          Prometheus :9090                                   │
+│  • Stocke les séries temporelles                                            │
+│  • Évalue les règles d'alerte (prometheus/alerts.yml)                       │
+└───────────────────────────────────┬─────────────────────────────────────────┘
+                                    │  PromQL (datasource)
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           Grafana :3000                                     │
+│  Dashboards provisionnés :                                                  │
+│    • FastAPI Monitoring         (api-dashboard.json)                        │
+│    • Frontend Monitoring        (frontend-dashboard.json)                   │
+│    • Frontend Template          (frontend-template-dashboard.json)          │
+│                                                                             │
+│  Unified Alerting :                                                         │
+│    • Règles d'alerte            (alerting/rules.yml)                        │
+│    • Contact Points :                                                       │
+│        ✉  SMTP / Email          (alerting/contactpoints.yml)                │
+│        💬 Google Chat webhook   (alerting/contactpoints.yml)                │
+│    • Notification Policies      (alerting/notificationpolicies.yml)         │
+└─────────────────┬──────────────────────────────┬────────────────────────────┘
+                  │ Email (SMTP)                  │ Google Chat webhook
+                  ▼                              ▼
+        ┌──────────────────┐          ┌──────────────────────┐
+        │  Boîte e-mail    │          │  Google Chat Space   │
+        │  team@example.com│          │  #monitoring-alerts  │
+        └──────────────────┘          └──────────────────────┘
 ```
 
-Chaque service expose un endpoint `/metrics` au format **Prometheus text format**. Prometheus scrape ces endpoints toutes les 15 secondes et stocke les données. Grafana interroge Prometheus pour afficher les dashboards.
+**Flux de données :**
+
+1. Chaque service expose un endpoint `/metrics` au format **Prometheus text format**.
+2. Prometheus scrape ces endpoints toutes les **15 secondes** et stocke les séries temporelles.
+3. Grafana interroge Prometheus via PromQL pour afficher les **dashboards**.
+4. Le moteur **Unified Alerting** de Grafana évalue les règles d'alerte toutes les minutes, et envoie des notifications via les **contact points** configurés (email, Google Chat).
 
 ---
 
@@ -311,6 +348,7 @@ histogram_quantile(0.99, sum by (le) (rate(frontend_http_request_duration_second
 apiVersion: 1
 datasources:
   - name: Prometheus
+    uid: prometheus-datasource   # UID stable référencé par les règles d'alerte
     type: prometheus
     access: proxy
     url: http://prometheus:9090
@@ -341,20 +379,39 @@ Grafana charge automatiquement tous les fichiers `.json` dans ce répertoire.
 | Fichier | Dashboard | Description |
 |---------|-----------|-------------|
 | `api-dashboard.json` | FastAPI Monitoring | Métriques de l'API backend |
-| `frontend-dashboard.json` | Frontend Monitoring | Métriques des serveurs React & Vue |
+| `frontend-dashboard.json` | Frontend Monitoring | Métriques des serveurs React & Vue (hardcodé) |
+| `frontend-template-dashboard.json` | Frontend Template | **Template générique** – variable `$app` pour tout framework |
+
+### Dashboard Template Frontend (`frontend-template-dashboard.json`)
+
+Ce dashboard est conçu pour être **importé dans n'importe quel projet** utilisant `prom-client`. Il utilise deux variables Grafana :
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `$datasource` | datasource | Sélecteur de datasource Prometheus |
+| `$app` | query | Sélecteur du nom d'application (`label_values(frontend_http_requests_total, app)`) |
+| `$interval` | interval | Fenêtre de temps pour les taux (30s / 1m / 5m…) |
+
+**Pour l'adapter à votre projet :**
+1. Importer le fichier JSON via **Dashboards → Import → Upload JSON file**
+2. Sélectionner votre datasource Prometheus
+3. Choisir le nom d'application dans le dropdown `$app`
+
+Le dashboard fonctionne avec n'importe quel framework (React, Vue, Angular, Next.js, Nuxt…) du moment que le serveur expose les métriques `frontend_http_requests_total` et `frontend_http_request_duration_seconds` avec un label `app`.
 
 ### Panels du dashboard Frontend
 
 | Panel | PromQL | Description |
 |-------|--------|-------------|
-| Total Requests React | `sum(increase(frontend_http_requests_total{app="react"}[5m]))` | Requêtes sur 5 min |
-| Total Requests Vue | `sum(increase(frontend_http_requests_total{app="vue"}[5m]))` | Requêtes sur 5 min |
-| Heap Node.js | `nodejs_heap_size_used_bytes` | Mémoire heap |
-| Request Rate by App | `sum by (app) (rate(frontend_http_requests_total[1m]))` | Débit par frontend |
+| Total Requests | `sum(increase(frontend_http_requests_total{app=~"$app"}[5m]))` | Requêtes sur 5 min |
+| Error Rate | `sum(increase(frontend_http_requests_total{app=~"$app", status_code=~"[45].."}[5m]))` | Erreurs sur 5 min |
+| Heap Node.js | `nodejs_heap_size_used_bytes{app=~"$app"}` | Mémoire heap |
+| Service Status | `up{job=~"frontend.*"}` | Indicateur UP/DOWN |
+| Request Rate by App | `sum by (app) (rate(frontend_http_requests_total{app=~"$app"}[$interval]))` | Débit par frontend |
 | Latence p50/p90/p99 | `histogram_quantile(0.XX, ...)` | Percentiles de latence |
-| Event Loop Lag | `nodejs_eventloop_lag_seconds` | Lag event loop |
-| CPU Usage | `rate(process_cpu_seconds_total[1m])` | Consommation CPU |
-| Error Rate 4xx/5xx | `rate(frontend_http_requests_total{status_code=~"[45].."}[1m])` | Taux d'erreurs |
+| Event Loop Lag | `nodejs_eventloop_lag_seconds{app=~"$app"}` | Lag event loop |
+| CPU Usage | `rate(process_cpu_seconds_total{app=~"$app"}[$interval])` | Consommation CPU |
+| Error Rate 4xx/5xx | `sum by (app) (rate(frontend_http_requests_total{app=~"$app", status_code=~"[45].."}[$interval]))` | Taux d'erreurs |
 
 ### Créer un dashboard manuellement dans Grafana
 
@@ -366,7 +423,118 @@ Grafana charge automatiquement tous les fichiers `.json` dans ce répertoire.
 
 ---
 
-## Docker Compose – vue d'ensemble
+## Alerting Grafana
+
+Grafana **Unified Alerting** (activé par défaut à partir de Grafana 9) est configuré via des fichiers YAML dans `grafana/provisioning/alerting/`.
+
+### Configuration rapide
+
+1. Copier `.env.example` en `.env` :
+
+```bash
+cp .env.example .env
+```
+
+2. Remplir les variables SMTP et/ou Google Chat dans `.env` :
+
+```dotenv
+# Activer l'envoi d'emails
+GF_SMTP_ENABLED=true
+GF_SMTP_HOST=smtp.gmail.com:587
+GF_SMTP_USER=votre-email@gmail.com
+GF_SMTP_PASSWORD=votre-mot-de-passe-application
+GF_SMTP_FROM_ADDRESS=votre-email@gmail.com
+ALERT_EMAIL_TO=equipe@example.com
+
+# Google Chat (optionnel)
+GOOGLECHAT_WEBHOOK_URL=https://chat.googleapis.com/v1/spaces/SPACE_ID/messages?key=KEY&token=TOKEN
+```
+
+3. Relancer la stack :
+
+```bash
+docker compose up -d grafana
+```
+
+### Configuration SMTP (email)
+
+Grafana utilise les variables d'environnement `GF_SMTP_*`. Pour Gmail, générez un **mot de passe d'application** :
+[https://myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+
+```yaml
+# Extrait de docker-compose.yml (géré automatiquement via .env)
+environment:
+  - GF_SMTP_ENABLED=true
+  - GF_SMTP_HOST=smtp.gmail.com:587
+  - GF_SMTP_USER=votre-email@gmail.com
+  - GF_SMTP_PASSWORD=votre-mot-de-passe-application
+  - GF_SMTP_FROM_ADDRESS=votre-email@gmail.com
+  - GF_SMTP_STARTTLS_POLICY=MandatoryStartTLS
+```
+
+### Configuration Google Chat
+
+Créez un **Incoming Webhook** dans votre Google Chat Space :
+
+1. Ouvrir votre Space → **Apps & integrations → Manage webhooks → Add webhook**
+2. Nommer le webhook (ex: `Grafana Monitoring`)
+3. Copier l'URL générée dans `.env` :
+
+```dotenv
+GOOGLECHAT_WEBHOOK_URL=https://chat.googleapis.com/v1/spaces/...
+```
+
+### Contact Points provisionnés
+
+| Nom | Type | Déclenchement |
+|-----|------|---------------|
+| `email-alerts` | Email (SMTP) | Toutes les alertes |
+| `googlechat-alerts` | Google Chat webhook | Alertes `severity=critical` |
+
+Le fichier `grafana/provisioning/alerting/contactpoints.yml` définit ces contact points.
+
+### Politique de notification
+
+- **Défaut** : toutes les alertes → `email-alerts`
+- **Route critique** : alertes avec `severity=critical` → aussi envoyées à `googlechat-alerts` (via `continue: true`)
+
+### Règles d'alerte
+
+Les règles sont dans `grafana/provisioning/alerting/rules.yml` et sont regroupées en trois catégories.
+
+#### Disponibilité
+
+| Alerte | Condition | Sévérité | Délai |
+|--------|-----------|----------|-------|
+| **Frontend Down** | `up{job=~"frontend.*"} < 1` | critical | 1 min |
+| **API Down** | `up{job="fastapi"} < 1` | critical | 1 min |
+| **API /health Not Healthy** | `/health` sans 2xx en 5 min | critical | 2 min |
+
+#### Taux d'erreurs
+
+| Alerte | Condition | Sévérité | Délai |
+|--------|-----------|----------|-------|
+| **API High 4xx Rate** | > 0.5 req/s avec 4xx | warning | 2 min |
+| **API High 5xx Rate** | > 0.05 req/s avec 5xx | critical | 1 min |
+| **Frontend High 4xx Rate** | > 0.5 req/s avec 4xx | warning | 2 min |
+| **Frontend High 5xx Rate** | > 0.05 req/s avec 5xx | critical | 1 min |
+
+#### Performance
+
+| Alerte | Condition | Sévérité | Délai |
+|--------|-----------|----------|-------|
+| **API High Latency** | p99 > 1 s | warning | 2 min |
+| **Frontend High Latency** | p99 > 1 s | warning | 2 min |
+
+### Règles Prometheus (`prometheus/alerts.yml`)
+
+En complément des règles Grafana, un fichier `prometheus/alerts.yml` définit les mêmes règles au niveau Prometheus. Elles sont utilisables si vous ajoutez un **Alertmanager** à la stack ultérieurement. Elles apparaissent aussi dans l'UI Prometheus à http://localhost:9090/alerts.
+
+### Vérification dans l'UI Grafana
+
+1. Ouvrir http://localhost:3000 → **Alerting → Alert rules** : toutes les règles doivent être visibles
+2. **Alerting → Contact points** : vérifier `email-alerts` et `googlechat-alerts`
+3. **Alerting → Notification policies** : vérifier le routage
 
 ```yaml
 services:
